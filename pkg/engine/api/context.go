@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
+	registry "github.com/google/go-containerregistry/pkg/v1"
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/engine/apicall"
@@ -115,7 +116,7 @@ func LoadConfigMap(ctx context.Context, logger logr.Logger, entry kyvernov1.Cont
 func fetchImageData(ctx context.Context, rclient registryclient.Client, logger logr.Logger, entry kyvernov1.ContextEntry, enginectx enginecontext.Interface) (interface{}, error) {
 	ref, err := variables.SubstituteAll(logger, enginectx, entry.ImageRegistry.Reference)
 	if err != nil {
-		return nil, fmt.Errorf("ailed to substitute variables in context entry %s %s: %v", entry.Name, entry.ImageRegistry.Reference, err)
+		return nil, fmt.Errorf("failed to substitute variables in context entry %s %s: %v", entry.Name, entry.ImageRegistry.Reference, err)
 	}
 	refString, ok := ref.(string)
 	if !ok {
@@ -167,12 +168,22 @@ func fetchImageDataMap(ctx context.Context, rclient registryclient.Client, ref s
 		return nil, fmt.Errorf("failed to decode config for image reference: %s, error: %v", ref, err)
 	}
 
+	var indexManifest *registry.IndexManifest
+	imageIndex, err := desc.ImageIndex()
+	if err == nil {
+		indexManifest, err = imageIndex.IndexManifest()
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch image index manifest for image reference: %s, error: %v", ref, err)
+		}
+	}
+
 	data := map[string]interface{}{
 		"image":         ref,
 		"resolvedImage": fmt.Sprintf("%s@%s", desc.Ref.Context().Name(), desc.Digest.String()),
 		"registry":      desc.Ref.Context().RegistryStr(),
 		"repository":    desc.Ref.Context().RepositoryStr(),
 		"identifier":    desc.Ref.Identifier(),
+		"indexManifest": indexManifest,
 		"manifest":      manifest,
 		"configData":    configData,
 	}
