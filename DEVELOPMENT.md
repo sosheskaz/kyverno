@@ -4,6 +4,7 @@ This document covers basic needs to work with Kyverno codebase.
 
 It contains instructions to build, run, and test Kyverno.
 
+- [Open project in devcontainer](#open-project-in-devcontainer-recommended)
 - [Tools](#tools)
 - [Building local binaries](#building-local-binaries)
   - [Building kyvernopre locally](#building-kyvernopre-locally)
@@ -26,6 +27,27 @@ It contains instructions to build, run, and test Kyverno.
   - [Generating helm charts CRDs](#generating-helm-charts-crds)
   - [Generating helm charts docs](#generating-helm-charts-docs)
 - [Debugging local code](#debugging-local-code)
+
+## Open project in devcontainer (recommended)
+- Clone the project to your local machine.
+- Make sure that you have the Visual Studio Code editor installed on your system.
+
+- Make sure that you have the Docker installed on your system.
+
+- Open the project in Visual Studio Code.
+
+- If you haven't already done so, install the **Dev Containers** extension in Visual Studio Code.
+
+- Once the extension is installed, you should see a green icon in the bottom left corner of the window.
+
+- After you have installed Dev Containers extension, it should automatically detect the .devcontainer folder inside the project,
+and should suggest you to open the project in container.
+
+- If it doesn't suggest you, then press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>p</kbd> and search "reopen in container" and click on it.
+
+- If everything goes well, the project should be opened in your devcontainer.
+
+- Then follow the steps as mentioned below to configure the project.
 
 ## Tools
 
@@ -395,10 +417,11 @@ You can run Kyverno locally or in your IDE of choice with a few steps:
 1. To run Kyverno locally against the remote cluster you will need to provide `--kubeconfig` and `--serverIP` arguments:
     - `--kubeconfig` must point to your kubeconfig file (usually `~/.kube/config`)
     - `--serverIP` must be set to `<local ip>:9443` (`<local ip>` is the private ip adress of your local machine)
+    - `--backgroundServiceAccountName` must be set to `system:serviceaccount:kyverno:kyverno-background-controller`
 
 Once you are ready with the steps above, Kyverno can be started locally with:
 ```console
-go run ./cmd/kyverno/ --kubeconfig ~/.kube/config --serverIP=<local-ip>:9443
+go run ./cmd/kyverno/ --kubeconfig ~/.kube/config --serverIP=<local-ip>:9443 --backgroundServiceAccountName=system:serviceaccount:kyverno:kyverno-background-controller
 ```
 
 You will need to adapt those steps to run debug sessions in your IDE of choice, but the general idea remains the same.

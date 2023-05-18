@@ -2,13 +2,13 @@ package event
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	kyvernov1informers "github.com/kyverno/kyverno/pkg/client/informers/externalversions/kyverno/v1"
 	kyvernov1listers "github.com/kyverno/kyverno/pkg/client/listers/kyverno/v1"
 	"github.com/kyverno/kyverno/pkg/clients/dclient"
-	"github.com/kyverno/kyverno/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
 	errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,13 +43,15 @@ type generator struct {
 
 	maxQueuedEvents int
 
+	omitEvents []string
+
 	log logr.Logger
 }
 
 // Controller interface to generate event
 type Controller interface {
-	controllers.Controller
 	Interface
+	Run(context.Context, int, *sync.WaitGroup)
 }
 
 // Interface to generate event
@@ -64,6 +66,7 @@ func NewEventGenerator(
 	cpInformer kyvernov1informers.ClusterPolicyInformer,
 	pInformer kyvernov1informers.PolicyInformer,
 	maxQueuedEvents int,
+	omitEvents []string,
 	log logr.Logger,
 ) Controller {
 	gen := generator{
@@ -76,6 +79,7 @@ func NewEventGenerator(
 		genPolicyRecorder:      NewRecorder(GeneratePolicyController, client.GetEventsInterface()),
 		mutateExistingRecorder: NewRecorder(MutateExistingController, client.GetEventsInterface()),
 		maxQueuedEvents:        maxQueuedEvents,
+		omitEvents:             omitEvents,
 		log:                    log,
 	}
 	return &gen
@@ -84,13 +88,11 @@ func NewEventGenerator(
 // Add queues an event for generation
 func (gen *generator) Add(infos ...Info) {
 	logger := gen.log
-
 	logger.V(3).Info("generating events", "count", len(infos))
 	if gen.maxQueuedEvents == 0 || gen.queue.Len() > gen.maxQueuedEvents {
 		logger.V(2).Info("exceeds the event queue limit, dropping the event", "maxQueuedEvents", gen.maxQueuedEvents, "current size", gen.queue.Len())
 		return
 	}
-
 	for _, info := range infos {
 		if info.Name == "" {
 			// dont create event for resources with generateName
@@ -98,20 +100,35 @@ func (gen *generator) Add(infos ...Info) {
 			logger.V(3).Info("skipping event creation for resource without a name", "kind", info.Kind, "name", info.Name, "namespace", info.Namespace)
 			continue
 		}
-		gen.queue.Add(info)
+
+		shouldEmitEvent := true
+		for _, eventReason := range gen.omitEvents {
+			if info.Reason == Reason(eventReason) {
+				shouldEmitEvent = false
+				logger.V(6).Info("omitting event", "kind", info.Kind, "name", info.Name, "namespace", info.Namespace, "reason", info.Reason)
+			}
+		}
+
+		if shouldEmitEvent {
+			gen.queue.Add(info)
+			logger.V(6).Info("creating event", "kind", info.Kind, "name", info.Name, "namespace", info.Namespace, "reason", info.Reason)
+		}
 	}
 }
 
 // Run begins generator
-func (gen *generator) Run(ctx context.Context, workers int) {
+func (gen *generator) Run(ctx context.Context, workers int, waitGroup *sync.WaitGroup) {
 	logger := gen.log
-	defer utilruntime.HandleCrash()
-
 	logger.Info("start")
 	defer logger.Info("shutting down")
-
+	defer utilruntime.HandleCrash()
+	defer gen.queue.ShutDown()
 	for i := 0; i < workers; i++ {
-		go wait.UntilWithContext(ctx, gen.runWorker, time.Second)
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			wait.UntilWithContext(ctx, gen.runWorker, time.Second)
+		}()
 	}
 	<-ctx.Done()
 }
@@ -135,7 +152,6 @@ func (gen *generator) handleErr(err error, key interface{}) {
 		gen.queue.AddRateLimited(key)
 		return
 	}
-
 	gen.queue.Forget(key)
 	if !errors.IsNotFound(err) {
 		logger.Error(err, "failed to generate event", "key", key)
@@ -147,7 +163,6 @@ func (gen *generator) processNextWorkItem() bool {
 	if shutdown {
 		return false
 	}
-
 	defer gen.queue.Done(obj)
 	var key Info
 	var ok bool
@@ -158,7 +173,6 @@ func (gen *generator) processNextWorkItem() bool {
 	}
 	err := gen.syncHandler(key)
 	gen.handleErr(err, obj)
-
 	return true
 }
 
@@ -198,6 +212,7 @@ func (gen *generator) syncHandler(key Info) error {
 		eventType = corev1.EventTypeNormal
 	}
 
+	logger.V(3).Info("creating the event", "source", key.Source, "type", eventType, "resource", key.Resource())
 	// based on the source of event generation, use different event recorders
 	switch key.Source {
 	case AdmissionController:

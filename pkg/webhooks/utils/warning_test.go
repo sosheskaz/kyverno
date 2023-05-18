@@ -11,7 +11,7 @@ import (
 
 func TestGetWarningMessages(t *testing.T) {
 	type args struct {
-		engineResponses []*engineapi.EngineResponse
+		engineResponses []engineapi.EngineResponse
 	}
 	tests := []struct {
 		name string
@@ -23,70 +23,44 @@ func TestGetWarningMessages(t *testing.T) {
 		want: nil,
 	}, {
 		name: "enmpty response",
-		args: args{[]*engineapi.EngineResponse{}},
+		args: args{[]engineapi.EngineResponse{}},
 		want: nil,
 	}, {
 		name: "warning",
-		args: args{[]*engineapi.EngineResponse{
-			{
-				Policy: &v1.ClusterPolicy{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test",
-					},
-				},
+		args: args{[]engineapi.EngineResponse{
+			engineapi.EngineResponse{
 				PolicyResponse: engineapi.PolicyResponse{
 					Rules: []engineapi.RuleResponse{
-						{
-							Name:    "rule",
-							Status:  engineapi.RuleStatusWarn,
-							Message: "message warn",
-						},
+						*engineapi.NewRuleResponse("rule", engineapi.Validation, "message warn", engineapi.RuleStatusWarn),
 					},
 				},
-			},
+			}.WithPolicy(&v1.ClusterPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+			}),
 		}},
 		want: []string{
 			"policy test.rule: message warn",
 		},
 	}, {
 		name: "multiple rules",
-		args: args{[]*engineapi.EngineResponse{
-			{
-				Policy: &v1.ClusterPolicy{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "test",
-					},
-				},
+		args: args{[]engineapi.EngineResponse{
+			engineapi.EngineResponse{
 				PolicyResponse: engineapi.PolicyResponse{
 					Rules: []engineapi.RuleResponse{
-						{
-							Name:    "rule-pass",
-							Status:  engineapi.RuleStatusPass,
-							Message: "message pass",
-						},
-						{
-							Name:    "rule-warn",
-							Status:  engineapi.RuleStatusWarn,
-							Message: "message warn",
-						},
-						{
-							Name:    "rule-fail",
-							Status:  engineapi.RuleStatusFail,
-							Message: "message fail",
-						},
-						{
-							Name:    "rule-error",
-							Status:  engineapi.RuleStatusError,
-							Message: "message error",
-						},
-						{
-							Name:    "rule-skip",
-							Status:  engineapi.RuleStatusSkip,
-							Message: "message skip",
-						},
+						*engineapi.RulePass("rule-pass", engineapi.Validation, "message pass"),
+						*engineapi.NewRuleResponse("rule-warn", engineapi.Validation, "message warn", engineapi.RuleStatusWarn),
+						*engineapi.RuleFail("rule-fail", engineapi.Validation, "message fail"),
+						*engineapi.RuleError("rule-error", engineapi.Validation, "message error", nil),
+						*engineapi.RuleSkip("rule-skip", engineapi.Validation, "message skip"),
 					},
 				},
-			},
+			}.WithPolicy(&v1.ClusterPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test",
+				},
+			}),
 		}},
 		want: []string{
 			"policy test.rule-warn: message warn",

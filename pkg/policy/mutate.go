@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-func (pc *PolicyController) handleMutate(policyKey string, policy kyvernov1.PolicyInterface) error {
+func (pc *policyController) handleMutate(policyKey string, policy kyvernov1.PolicyInterface) error {
 	logger := pc.log.WithName("handleMutate").WithName(policyKey)
 	if !policy.GetSpec().MutateExistingOnPolicyUpdate {
 		logger.V(4).Info("skip policy application on policy event", "policyKey", policyKey, "mutateExiting", policy.GetSpec().MutateExistingOnPolicyUpdate)
@@ -31,7 +31,7 @@ func (pc *PolicyController) handleMutate(policyKey string, policy kyvernov1.Poli
 				}
 
 				logger.Info("creating new UR for mutate")
-				ur := newUR(policy, resourceSpecFromUnstructured(trigger), ruleType)
+				ur := newUR(policy, backgroundcommon.ResourceSpecFromUnstructured(*trigger), rule.Name, ruleType, false)
 				skip, err := pc.handleUpdateRequest(ur, trigger, rule, policy)
 				if err != nil {
 					pc.log.Error(err, "failed to create new UR on policy update", "policy", policy.GetName(), "rule", rule.Name, "rule type", ruleType,
@@ -49,7 +49,7 @@ func (pc *PolicyController) handleMutate(policyKey string, policy kyvernov1.Poli
 	return nil
 }
 
-func (pc *PolicyController) listMutateURs(policyKey string, trigger *unstructured.Unstructured) []*kyvernov1beta1.UpdateRequest {
+func (pc *policyController) listMutateURs(policyKey string, trigger *unstructured.Unstructured) []*kyvernov1beta1.UpdateRequest {
 	mutateURs, err := pc.urLister.List(labels.SelectorFromSet(backgroundcommon.MutateLabelsSet(policyKey, trigger)))
 	if err != nil {
 		pc.log.Error(err, "failed to list update request for mutate policy")

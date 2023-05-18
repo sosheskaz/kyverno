@@ -2,6 +2,8 @@ package jmespath
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -9,18 +11,18 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/rand"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	trunc "github.com/aquilax/truncate"
 	"github.com/blang/semver/v4"
 	gojmespath "github.com/jmespath/go-jmespath"
+	"github.com/kyverno/kyverno/pkg/config"
+	imageutils "github.com/kyverno/kyverno/pkg/utils/image"
 	wildcard "github.com/kyverno/kyverno/pkg/utils/wildcard"
 	regen "github.com/zach-klippenstein/goregen"
 	"golang.org/x/crypto/cryptobyte"
@@ -49,7 +51,9 @@ var (
 	regexMatch             = "regex_match"
 	patternMatch           = "pattern_match"
 	labelMatch             = "label_match"
+	toBoolean              = "to_boolean"
 	add                    = "add"
+	sum                    = "sum"
 	subtract               = "subtract"
 	multiply               = "multiply"
 	divide                 = "divide"
@@ -65,9 +69,10 @@ var (
 	objectFromLists        = "object_from_lists"
 	random                 = "random"
 	x509_decode            = "x509_decode"
+	imageNormalize         = "image_normalize"
 )
 
-func GetFunctions() []FunctionEntry {
+func GetFunctions(configuration config.Configuration) []FunctionEntry {
 	return []FunctionEntry{{
 		FunctionEntry: gojmespath.FunctionEntry{
 			Name: compare,
@@ -228,6 +233,16 @@ func GetFunctions() []FunctionEntry {
 		Note:       "object arguments must be enclosed in backticks; ex. `{{request.object.spec.template.metadata.labels}}`",
 	}, {
 		FunctionEntry: gojmespath.FunctionEntry{
+			Name: toBoolean,
+			Arguments: []argSpec{
+				{Types: []jpType{jpString}},
+			},
+			Handler: jpToBoolean,
+		},
+		ReturnType: []jpType{jpBool},
+		Note:       "It returns true or false for any string, such as 'True', 'TruE', 'False', 'FAlse', 'faLSE', etc.",
+	}, {
+		FunctionEntry: gojmespath.FunctionEntry{
 			Name: add,
 			Arguments: []argSpec{
 				{Types: []jpType{jpAny}},
@@ -237,6 +252,16 @@ func GetFunctions() []FunctionEntry {
 		},
 		ReturnType: []jpType{jpAny},
 		Note:       "does arithmetic addition of two specified values of numbers, quantities, and durations",
+	}, {
+		FunctionEntry: gojmespath.FunctionEntry{
+			Name: sum,
+			Arguments: []argSpec{
+				{Types: []jpType{jpArray}},
+			},
+			Handler: jpSum,
+		},
+		ReturnType: []jpType{jpAny},
+		Note:       "does arithmetic addition of specified array of values of numbers, quantities, and durations",
 	}, {
 		FunctionEntry: gojmespath.FunctionEntry{
 			Name: subtract,
@@ -520,6 +545,16 @@ func GetFunctions() []FunctionEntry {
 		},
 		ReturnType: []jpType{jpString},
 		Note:       "returns the result of rounding time down to a multiple of duration",
+	}, {
+		FunctionEntry: gojmespath.FunctionEntry{
+			Name: imageNormalize,
+			Arguments: []argSpec{
+				{Types: []jpType{jpString}},
+			},
+			Handler: jpImageNormalize(configuration),
+		},
+		ReturnType: []jpType{jpString},
+		Note:       "normalizes an image reference",
 	}}
 }
 
@@ -736,17 +771,54 @@ func jpLabelMatch(arguments []interface{}) (interface{}, error) {
 	return true, nil
 }
 
-func jpAdd(arguments []interface{}) (interface{}, error) {
-	op1, op2, err := ParseArithemticOperands(arguments, add)
+func jpToBoolean(arguments []interface{}) (interface{}, error) {
+	if input, err := validateArg(toBoolean, arguments, 0, reflect.String); err != nil {
+		return nil, err
+	} else {
+		switch strings.ToLower(input.String()) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		default:
+			return nil, formatError(genericError, toBoolean, fmt.Sprintf("lowercase argument must be 'true' or 'false' (provided: '%s')", input.String()))
+		}
+	}
+}
+
+func _jpAdd(arguments []interface{}, operator string) (interface{}, error) {
+	op1, op2, err := parseArithemticOperands(arguments, operator)
 	if err != nil {
 		return nil, err
 	}
+	return op1.Add(op2, operator)
+}
 
-	return op1.Add(op2)
+func jpAdd(arguments []interface{}) (interface{}, error) {
+	return _jpAdd(arguments, add)
+}
+
+func jpSum(arguments []interface{}) (interface{}, error) {
+	items, ok := arguments[0].([]interface{})
+	if !ok {
+		return nil, formatError(typeMismatchError, sum)
+	}
+	if len(items) == 0 {
+		return nil, formatError(genericError, sum, "at least one element in the array is required")
+	}
+	var err error
+	result := items[0]
+	for _, item := range items[1:] {
+		result, err = _jpAdd([]interface{}{result, item}, sum)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func jpSubtract(arguments []interface{}) (interface{}, error) {
-	op1, op2, err := ParseArithemticOperands(arguments, subtract)
+	op1, op2, err := parseArithemticOperands(arguments, subtract)
 	if err != nil {
 		return nil, err
 	}
@@ -755,7 +827,7 @@ func jpSubtract(arguments []interface{}) (interface{}, error) {
 }
 
 func jpMultiply(arguments []interface{}) (interface{}, error) {
-	op1, op2, err := ParseArithemticOperands(arguments, multiply)
+	op1, op2, err := parseArithemticOperands(arguments, multiply)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +836,7 @@ func jpMultiply(arguments []interface{}) (interface{}, error) {
 }
 
 func jpDivide(arguments []interface{}) (interface{}, error) {
-	op1, op2, err := ParseArithemticOperands(arguments, divide)
+	op1, op2, err := parseArithemticOperands(arguments, divide)
 	if err != nil {
 		return nil, err
 	}
@@ -773,7 +845,7 @@ func jpDivide(arguments []interface{}) (interface{}, error) {
 }
 
 func jpModulo(arguments []interface{}) (interface{}, error) {
-	op1, op2, err := ParseArithemticOperands(arguments, modulo)
+	op1, op2, err := parseArithemticOperands(arguments, modulo)
 	if err != nil {
 		return nil, err
 	}
@@ -974,7 +1046,13 @@ func jpRandom(arguments []interface{}) (interface{}, error) {
 	if pattern == "" {
 		return "", errors.New("no pattern provided")
 	}
-	rand.Seed(time.Now().UnixNano())
+
+	b := make([]byte, 8)
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, err
+	}
+
 	ans, err := regen.Generate(pattern)
 	if err != nil {
 		return nil, err
@@ -982,56 +1060,89 @@ func jpRandom(arguments []interface{}) (interface{}, error) {
 	return ans, nil
 }
 
-func jpX509Decode(arguments []interface{}) (interface{}, error) {
-	res := make(map[string]interface{})
-	input, err := validateArg(x509_decode, arguments, 0, reflect.String)
-	if err != nil {
+func encode[T any](in T) (interface{}, error) {
+	buf := new(bytes.Buffer)
+	enc := json.NewEncoder(buf)
+	if err := enc.Encode(in); err != nil {
 		return nil, err
 	}
-	p, _ := pem.Decode([]byte(input.String()))
-	if p == nil {
-		return res, errors.New("invalid certificate")
+	res := map[string]interface{}{}
+	if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
+		return nil, err
 	}
+	return res, nil
+}
 
-	cert, err := x509.ParseCertificate(p.Bytes)
-	if err != nil {
-		return res, err
-	}
-
-	buf := new(bytes.Buffer)
-	if fmt.Sprint(cert.PublicKeyAlgorithm) == "RSA" {
-		spki := cryptobyte.String(cert.RawSubjectPublicKeyInfo)
+func jpX509Decode(arguments []interface{}) (interface{}, error) {
+	parseSubjectPublicKeyInfo := func(data []byte) (*rsa.PublicKey, error) {
+		spki := cryptobyte.String(data)
 		if !spki.ReadASN1(&spki, cryptobyte_asn1.SEQUENCE) {
-			return res, errors.New("writing asn.1 element to 'spki' failed")
+			return nil, errors.New("writing asn.1 element to 'spki' failed")
 		}
 		var pkAISeq cryptobyte.String
 		if !spki.ReadASN1(&pkAISeq, cryptobyte_asn1.SEQUENCE) {
-			return res, errors.New("writing asn.1 element to 'pkAISeq' failed")
+			return nil, errors.New("writing asn.1 element to 'pkAISeq' failed")
 		}
 		var spk asn1.BitString
 		if !spki.ReadASN1BitString(&spk) {
-			return res, errors.New("writing asn.1 bit string to 'spk' failed")
+			return nil, errors.New("writing asn.1 bit string to 'spk' failed")
 		}
-		kk, err := x509.ParsePKCS1PublicKey(spk.Bytes)
-		if err != nil {
-			return res, err
-		}
-
-		cert.PublicKey = PublicKey{
-			N: kk.N.String(),
-			E: kk.E,
-		}
-
-		enc := json.NewEncoder(buf)
-		err = enc.Encode(cert)
-		if err != nil {
-			return res, err
+		if kk, err := x509.ParsePKCS1PublicKey(spk.Bytes); err != nil {
+			return nil, err
+		} else {
+			return kk, nil
 		}
 	}
-
-	if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
-		return res, err
+	if input, err := validateArg(x509_decode, arguments, 0, reflect.String); err != nil {
+		return nil, err
+	} else if block, _ := pem.Decode([]byte(input.String())); block == nil {
+		return nil, errors.New("failed to decode PEM block")
+	} else {
+		switch block.Type {
+		case "CERTIFICATE":
+			var cert *x509.Certificate
+			if cert, err = x509.ParseCertificate(block.Bytes); err != nil {
+				return nil, err
+			} else if cert.PublicKeyAlgorithm != x509.RSA {
+				return nil, errors.New("certificate should use rsa algorithm")
+			} else if pk, err := parseSubjectPublicKeyInfo(cert.RawSubjectPublicKeyInfo); err != nil {
+				return nil, errors.New("failed to parse subject public key info")
+			} else {
+				cert.PublicKey = PublicKey{
+					N: pk.N.String(),
+					E: pk.E,
+				}
+				return encode(cert)
+			}
+		case "CERTIFICATE REQUEST":
+			var csr *x509.CertificateRequest
+			if csr, err = x509.ParseCertificateRequest(block.Bytes); err != nil {
+				return nil, err
+			} else if csr.PublicKeyAlgorithm != x509.RSA {
+				return nil, errors.New("certificate should use rsa algorithm")
+			} else if pk, err := parseSubjectPublicKeyInfo(csr.RawSubjectPublicKeyInfo); err != nil {
+				return nil, errors.New("failed to parse subject public key info")
+			} else {
+				csr.PublicKey = PublicKey{
+					N: pk.N.String(),
+					E: pk.E,
+				}
+				return encode(csr)
+			}
+		default:
+			return nil, errors.New("PEM block neither contains a CERTIFICATE or CERTIFICATE REQUEST")
+		}
 	}
+}
 
-	return res, nil
+func jpImageNormalize(configuration config.Configuration) gojmespath.JpFunction {
+	return func(arguments []interface{}) (interface{}, error) {
+		if image, err := validateArg(imageNormalize, arguments, 0, reflect.String); err != nil {
+			return nil, err
+		} else if infos, err := imageutils.GetImageInfo(image.String(), configuration); err != nil {
+			return nil, formatError(genericError, imageNormalize, err)
+		} else {
+			return infos.String(), nil
+		}
+	}
 }

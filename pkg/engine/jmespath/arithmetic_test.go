@@ -82,7 +82,153 @@ func Test_Add(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			jp, err := New(tc.test)
+			jp, err := newJMESPath(cfg, tc.test)
+			assert.NilError(t, err)
+
+			result, err := jp.Search("")
+			if !tc.err {
+				assert.NilError(t, err)
+			} else {
+				assert.Assert(t, err != nil)
+				return
+			}
+
+			if tc.retFloat {
+				equal, ok := result.(float64)
+				assert.Assert(t, ok)
+				assert.Equal(t, equal, tc.expectedResult.(float64))
+			} else {
+				equal, ok := result.(string)
+				assert.Assert(t, ok)
+				assert.Equal(t, equal, tc.expectedResult.(string))
+			}
+		})
+	}
+}
+
+func Test_Sum(t *testing.T) {
+	testCases := []struct {
+		name           string
+		test           string
+		expectedResult interface{}
+		err            bool
+		retFloat       bool
+	}{
+		// Scalar
+		{
+			name: "sum([]) -> error",
+			test: "sum([])",
+			err:  true,
+		},
+		{
+			name:           "sum(Scalar[]) -> Scalar",
+			test:           "sum([`12`])",
+			expectedResult: 12.0,
+			retFloat:       true,
+		},
+		{
+			name:           "sum(Scalar[]) -> Scalar",
+			test:           "sum([`12`, `13`, `1`, `4`])",
+			expectedResult: 30.0,
+			retFloat:       true,
+		},
+		{
+			name:           "sum(Scalar[]) -> Scalar",
+			test:           "sum([`12`, `13`])",
+			expectedResult: 25.0,
+			retFloat:       true,
+		},
+		{
+			name: "sum(Scalar[Scalar, Duration, ..]) -> error",
+			test: "sum(['12', '13s'])",
+			err:  true,
+		},
+		{
+			name: "sum(Scalar[Scalar, Quantity, ..]) -> error",
+			test: "sum([`12`, '13Ki'])",
+			err:  true,
+		},
+		{
+			name: "sum(Scalar[Scalar, Quatity, ..]) -> error",
+			test: "sum([`12`, '13'])",
+			err:  true,
+		},
+		// Quantity
+		{
+			name: "sum([]) -> error",
+			test: "sum([])",
+			err:  true,
+		},
+		{
+			name:           "sum(Quantity[]) -> Quantity",
+			test:           "sum(['12Ki'])",
+			expectedResult: `12Ki`,
+		},
+		{
+			name:           "sum(Quantity[]) -> Quantity",
+			test:           "sum(['12Ki', '13Ki', '1Ki', '4Ki'])",
+			expectedResult: `30Ki`,
+		},
+		{
+			name:           "sum(Quantity[]) -> Quantity",
+			test:           "sum(['12Ki', '13Ki'])",
+			expectedResult: `25Ki`,
+		},
+		{
+			name:           "sum(Quantity[]) -> Quantity",
+			test:           "sum(['12Ki', '13'])",
+			expectedResult: `12301`,
+		},
+		{
+			name: "sum(Quantity[Quantity, Duration, ..]) -> error",
+			test: "sum(['12Ki', '13s'])",
+			err:  true,
+		},
+		{
+			name: "sum(Quantity[Quantity, Scalar, ..]) -> error",
+			test: "sum(['12Ki', `13`])",
+			err:  true,
+		},
+		// Duration
+		{
+			name: "sum([]) -> error",
+			test: "sum([])",
+			err:  true,
+		},
+		{
+			name:           "sum(Duration[]) -> Duration",
+			test:           "sum(['12s'])",
+			expectedResult: `12s`,
+		},
+		{
+			name:           "sum(Duration[]) -> Duration",
+			test:           "sum(['12s', '13s', '1s', '4s'])",
+			expectedResult: `30s`,
+		},
+		{
+			name:           "sum(Duration[]) -> Duration",
+			test:           "sum(['12s', '13s'])",
+			expectedResult: `25s`,
+		},
+		{
+			name: "sum(Duration[Duration, Scalar, ..]) -> error",
+			test: "sum(['12s', `13`])",
+			err:  true,
+		},
+		{
+			name: "sum(Duration[Duration, Quantity, ..]) -> error",
+			test: "sum(['12s', '13Ki'])",
+			err:  true,
+		},
+		{
+			name: "sum(Duration[Duration, Quantity, ..]) -> error",
+			test: "sum(['12s', '13'])",
+			err:  true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			jp, err := newJMESPath(cfg, tc.test)
 			assert.NilError(t, err)
 
 			result, err := jp.Search("")
@@ -181,7 +327,7 @@ func Test_Subtract(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			jp, err := New(tc.test)
+			jp, err := newJMESPath(cfg, tc.test)
 			assert.NilError(t, err)
 
 			result, err := jp.Search("")
@@ -280,7 +426,7 @@ func Test_Multiply(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			jp, err := New(tc.test)
+			jp, err := newJMESPath(cfg, tc.test)
 			assert.NilError(t, err)
 
 			result, err := jp.Search("")
@@ -442,7 +588,7 @@ func Test_Divide(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			jp, err := New(tc.test)
+			jp, err := newJMESPath(cfg, tc.test)
 			assert.NilError(t, err)
 
 			result, err := jp.Search("")
@@ -598,7 +744,7 @@ func Test_Modulo(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			jp, err := New(tc.test)
+			jp, err := newJMESPath(cfg, tc.test)
 			assert.NilError(t, err)
 
 			result, err := jp.Search("")
@@ -646,7 +792,7 @@ func TestScalar_Multiply(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op1 := Scalar{
+			op1 := scalar{
 				float64: tt.fields.float64,
 			}
 			got, err := op1.Multiply(tt.args.op2)
@@ -669,8 +815,8 @@ func TestParseArithemticOperands(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    Operand
-		want1   Operand
+		want    operand
+		want1   operand
 		wantErr bool
 	}{{
 		args: args{
@@ -691,7 +837,7 @@ func TestParseArithemticOperands(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1, err := ParseArithemticOperands(tt.args.arguments, tt.args.operator)
+			got, got1, err := parseArithemticOperands(tt.args.arguments, tt.args.operator)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseArithemticOperands() error = %v, wantErr %v", err, tt.wantErr)
 				return
